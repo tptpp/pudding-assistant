@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CodeAssistant"
+rootProject.name = "Pudding"
 include(":app")

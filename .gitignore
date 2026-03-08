@@ -7,3 +7,5 @@ gradlew.bat
 local.properties
 *.iml
 .idea/
+PROJECT_INFO.md
+VERIFICATION_LOG.md

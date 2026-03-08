@@ -1,15 +1,16 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.kapt")
     id("com.google.devtools.ksp")
 }
 
 android {
-    namespace = "com.codeassistant"
+    namespace = "com.pudding.ai"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.codeassistant"
+        applicationId = "com.pudding.ai"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -45,6 +46,10 @@ android {
     }
 }
 
+configurations.all {
+    exclude(group = "org.jetbrains", module = "annotations-java5")
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
@@ -71,6 +76,21 @@ dependencies {
     
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    
+
+    // Markdown rendering with Markwon
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:syntax-highlight:4.6.2")
+    implementation("io.noties.markwon:linkify:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
+    implementation("io.noties.markwon:image:4.6.2")
+    implementation("io.noties.markwon:html:4.6.2")
+    implementation("io.noties:prism4j:2.0.0")
+    kapt("io.noties:prism4j-bundler:2.0.0")
+
+    // Cron expression parsing
+    implementation("com.cronutils:cron-utils:9.2.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
