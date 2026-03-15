@@ -12,15 +12,17 @@ import com.cronutils.parser.CronParser
 import com.google.gson.JsonObject
 import com.pudding.ai.R
 import com.pudding.ai.data.database.TaskDao
+import com.pudding.ai.data.debug.ToolCallLogBuilder
 import com.pudding.ai.data.model.Task
 import com.pudding.ai.data.model.TaskStatus
 import com.pudding.ai.data.model.TaskType
+import com.pudding.ai.data.repository.DebugLogRepository
+import com.pudding.ai.data.repository.SearchRepository
 import kotlinx.coroutines.flow.first
-import java.text.SimpleDateFormat
 import java.time.ZonedDateTime
 import java.time.ZoneId
-import java.util.Calendar
-import java.util.Date
+import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
 import java.util.Locale
 
 /**
@@ -32,20 +34,31 @@ import java.util.Locale
  * - list_tasks: 查询任务列表
  * - update_task_status: 修改任务状态
  * - send_notification: 发送通知
+ * - web_search: 网络搜索
+ * - browser_action: 浏览器自动化操作
  *
  * @property taskDao 任务数据访问对象
  * @property taskScheduler 任务调度器
  * @property context 应用上下文（用于发送通知）
+ * @property searchRepository 搜索仓库（用于网络搜索）
+ * @property debugLogRepository 调试日志仓库（可选，用于记录工具调用）
+ * @property browserManager 浏览器管理器（用于浏览器自动化）
  */
 class TaskToolExecutor(
     private val taskDao: TaskDao,
     private val taskScheduler: TaskScheduler,
-    private val context: Context? = null
+    private val context: Context? = null,
+    private val searchRepository: SearchRepository? = null,
+    private val debugLogRepository: DebugLogRepository? = null,
+    private val browserManager: BrowserManager? = null
 ) {
     companion object {
         private const val TAG = "TaskToolExecutor"
         const val CHANNEL_ID = "task_notifications"
     }
+
+    // 工具调用日志构建器
+    private val logBuilder = ToolCallLogBuilder()
 
     // 通知管理器（延迟初始化）
     private val notificationManager: NotificationManager? by lazy {
@@ -59,18 +72,67 @@ class TaskToolExecutor(
 
     /**
      * 执行工具调用
+     *
+     * @param conversationId 对话ID
+     * @param toolName 工具名称
+     * @param params 工具参数
+     * @param onStatusUpdate 状态更新回调，用于通知当前正在执行的操作
      */
     suspend fun executeToolCall(
         conversationId: Long,
         toolName: String,
-        params: JsonObject
-    ): ToolResult = when (toolName) {
-        "create_task" -> executeCreateTask(conversationId, params)
-        "delete_task" -> executeDeleteTask(params)
-        "list_tasks" -> executeListTasks(params)
-        "update_task_status" -> executeUpdateTaskStatus(params)
-        "send_notification" -> executeSendNotification(params)
-        else -> ToolResult(false, "未知工具: $toolName")
+        params: JsonObject,
+        onStatusUpdate: ((String) -> Unit)? = null
+    ): ToolResult {
+        val startTime = System.currentTimeMillis()
+
+        return try {
+            val result = when (toolName) {
+                "create_task" -> executeCreateTask(conversationId, params)
+                "delete_task" -> executeDeleteTask(params)
+                "list_tasks" -> executeListTasks(params)
+                "update_task_status" -> executeUpdateTaskStatus(params)
+                "send_notification" -> executeSendNotification(params)
+                "web_search" -> {
+                    val query = params.get("query")?.asString
+                    onStatusUpdate?.invoke("正在搜索: $query")
+                    executeWebSearch(params)
+                }
+                "browser_action" -> {
+                    val action = params.get("action")?.asString
+                    onStatusUpdate?.invoke(getBrowserActionMessage(action))
+                    executeBrowserAction(params, onStatusUpdate)
+                }
+                else -> ToolResult(false, "未知工具: $toolName")
+            }
+
+            // 记录调试日志
+            val durationMs = System.currentTimeMillis() - startTime
+            val log = logBuilder.build(
+                toolName = toolName,
+                params = params,
+                result = result,
+                durationMs = durationMs,
+                conversationId = conversationId,
+                error = null
+            )
+            debugLogRepository?.saveLog(log)
+
+            result
+        } catch (e: Exception) {
+            val result = ToolResult(false, "工具执行异常: ${e.message}")
+            val durationMs = System.currentTimeMillis() - startTime
+            val log = logBuilder.build(
+                toolName = toolName,
+                params = params,
+                result = null,
+                durationMs = durationMs,
+                conversationId = conversationId,
+                error = e
+            )
+            debugLogRepository?.saveLog(log)
+            result
+        }
     }
 
     /**
@@ -338,12 +400,104 @@ class TaskToolExecutor(
     }
 
     /**
+     * 执行网络搜索
+     */
+    private suspend fun executeWebSearch(params: JsonObject): ToolResult {
+        return try {
+            val query = params.get("query")?.asString
+            if (query.isNullOrBlank()) {
+                return ToolResult(false, "搜索关键词不能为空")
+            }
+
+            val repository = searchRepository
+            if (repository == null) {
+                Log.w(TAG, "SearchRepository not available")
+                return ToolResult(false, "搜索服务不可用，请检查设置")
+            }
+
+            Log.d(TAG, "Executing web search: $query")
+            val searchResult = repository.search(query)
+
+            Log.d(TAG, "Web search completed for: $query")
+            ToolResult(true, searchResult)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to execute web search", e)
+            ToolResult(false, "搜索失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 执行浏览器自动化操作
+     */
+    private suspend fun executeBrowserAction(
+        params: JsonObject,
+        onStatusUpdate: ((String) -> Unit)? = null
+    ): ToolResult {
+        return try {
+            val action = params.get("action")?.asString
+            if (action.isNullOrBlank()) {
+                return ToolResult(false, "操作类型不能为空")
+            }
+
+            val manager = browserManager
+            if (manager == null) {
+                Log.w(TAG, "BrowserManager not available")
+                return ToolResult(false, "浏览器服务不可用")
+            }
+
+            // 检查 visible 参数，如果为 true 则显示浮层
+            val visible = params.get("visible")?.asBoolean ?: false
+            if (visible) {
+                Log.d(TAG, "Browser visible mode requested, showing overlay")
+                manager.showOverlay()
+                manager.setTaskActive(true)
+            }
+
+            Log.d(TAG, "Executing browser action: $action, visible=$visible")
+            // 更新状态：浏览器操作进行中
+            onStatusUpdate?.invoke(getBrowserActionMessage(action))
+
+            val result = manager.executeAction(action, params)
+
+            Log.d(TAG, "Browser action completed: $action, success=${result.success}")
+
+            if (result.success) {
+                // 将结果数据转换为可序列化的格式
+                val data = result.data
+                val resultData = when (data) {
+                    is Map<*, *> -> {
+                        // 处理 Map 类型的数据
+                        val gson = com.google.gson.Gson()
+                        gson.toJson(data)
+                    }
+                    is String -> data
+                    null -> ""
+                    else -> data.toString()
+                }
+                ToolResult(true, result.message, resultData)
+            } else {
+                ToolResult(false, result.message)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to execute browser action", e)
+            ToolResult(false, "浏览器操作失败: ${e.message}")
+        }
+    }
+
+    /**
      * 解析日期时间字符串
      * 支持格式：yyyy-MM-dd HH:mm
      */
     private fun parseDateTime(dateTimeStr: String): Long {
-        val format = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        return format.parse(dateTimeStr)?.time ?: System.currentTimeMillis()
+        return try {
+            val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.getDefault())
+            LocalDateTime.parse(dateTimeStr, formatter)
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
     }
 
     /**
@@ -359,6 +513,25 @@ class TaskToolExecutor(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to calculate next run time for: $cronExpression", e)
             Long.MAX_VALUE
+        }
+    }
+
+    /**
+     * 获取浏览器操作的友好状态消息
+     */
+    private fun getBrowserActionMessage(action: String?): String {
+        return when (action) {
+            "navigate" -> "正在打开网页..."
+            "click" -> "正在点击元素..."
+            "type" -> "正在输入文本..."
+            "wait" -> "正在等待页面..."
+            "screenshot" -> "正在截图..."
+            "getContent" -> "正在获取页面内容..."
+            "scroll" -> "正在滚动页面..."
+            "back" -> "正在返回上一页..."
+            "forward" -> "正在前进..."
+            "refresh" -> "正在刷新页面..."
+            else -> "正在执行浏览器操作..."
         }
     }
 }

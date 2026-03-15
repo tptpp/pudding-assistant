@@ -1,6 +1,7 @@
 package com.pudding.ai.data.repository
 
 import android.util.Log
+import com.pudding.ai.BuildConfig
 import com.pudding.ai.data.api.*
 import com.pudding.ai.data.model.ApiProvider
 import com.pudding.ai.data.model.Message
@@ -8,6 +9,7 @@ import com.pudding.ai.data.model.MessageRole
 import com.pudding.ai.data.model.ModelConfig
 import com.pudding.ai.service.ToolDefinition
 import com.pudding.ai.service.ToolResult
+import com.pudding.ai.util.RetryInterceptor
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
@@ -30,14 +32,25 @@ import java.util.concurrent.TimeUnit
  * - OpenAI 和 Anthropic API
  * - 流式响应（SSE）
  * - Function Call（工具调用）
+ * - 自动重试机制
+ * - 线程安全的状态管理
  *
  * 使用 Retrofit 和 OkHttp 进行网络请求，
  * 支持动态更新 API 配置。
  */
 class ChatRepository {
 
+    companion object {
+        private const val MAX_TOOL_ITERATIONS = 15
+    }
+
+    @Volatile
     private var currentConfig: ModelConfig? = null
+
+    @Volatile
     private var apiService: ChatApiService? = null
+
+    private val lock = Any()
 
     private fun createOkHttpClient(config: ModelConfig): OkHttpClient {
         return OkHttpClient.Builder()
@@ -57,6 +70,12 @@ class ChatRepository {
                 }
                 chain.proceed(request.build())
             })
+            // 添加自动重试拦截器
+            .addInterceptor(RetryInterceptor(
+                maxRetry = 3,
+                initialDelayMs = 1000,
+                maxDelayMs = 10000
+            ))
             .connectTimeout(60, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -64,33 +83,56 @@ class ChatRepository {
     }
 
     fun updateConfig(config: ModelConfig) {
-        Log.d("ChatRepository", "updateConfig called: baseUrl=${config.baseUrl}, apiKey=${config.apiKey.take(10)}...")
-        // 验证 baseUrl 是否有效
-        if (config.baseUrl.isBlank()) {
-            Log.w("ChatRepository", "baseUrl is blank, apiService set to null")
-            currentConfig = config
-            apiService = null  // 清空 apiService，等待后续配置有效 URL
-            return
-        }
+        synchronized(lock) {
+            // 安全日志：仅在调试模式下显示敏感信息
+            val apiKeyPreview = if (BuildConfig.DEBUG) {
+                config.apiKey.take(10) + "..."
+            } else {
+                "***"
+            }
+            Log.d("ChatRepository", "updateConfig called: baseUrl=${config.baseUrl}, apiKey=$apiKeyPreview")
 
-        // 始终重新创建 apiService 以确保配置更新
-        currentConfig = config
-        apiService = try {
-            // Retrofit 要求 baseUrl 必须以 / 结尾
-            val baseUrl = if (config.baseUrl.endsWith("/")) config.baseUrl else "${config.baseUrl}/"
-            Log.d("ChatRepository", "Creating Retrofit with baseUrl: $baseUrl")
-            val service = Retrofit.Builder()
-                .baseUrl(baseUrl)
-                .client(createOkHttpClient(config))
-                .addConverterFactory(GsonConverterFactory.create())
-                .build()
-                .create(ChatApiService::class.java)
-            Log.d("ChatRepository", "Retrofit service created successfully")
-            service
-        } catch (e: Exception) {
-            Log.e("ChatRepository", "Failed to create Retrofit service", e)
-            null  // URL 格式无效时，不创建 API 服务
+            // 验证 baseUrl 是否有效
+            if (config.baseUrl.isBlank()) {
+                Log.w("ChatRepository", "baseUrl is blank, apiService set to null")
+                currentConfig = config
+                apiService = null  // 清空 apiService，等待后续配置有效 URL
+                return
+            }
+
+            // 始终重新创建 apiService 以确保配置更新
+            currentConfig = config
+            apiService = try {
+                // Retrofit 要求 baseUrl 必须以 / 结尾
+                val baseUrl = if (config.baseUrl.endsWith("/")) config.baseUrl else "${config.baseUrl}/"
+                Log.d("ChatRepository", "Creating Retrofit with baseUrl: $baseUrl")
+                val service = Retrofit.Builder()
+                    .baseUrl(baseUrl)
+                    .client(createOkHttpClient(config))
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+                    .create(ChatApiService::class.java)
+                Log.d("ChatRepository", "Retrofit service created successfully")
+                service
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to create Retrofit service", e)
+                null  // URL 格式无效时，不创建 API 服务
+            }
         }
+    }
+
+    /**
+     * 获取当前配置（线程安全）
+     */
+    fun getCurrentConfig(): ModelConfig? {
+        return synchronized(lock) { currentConfig }
+    }
+
+    /**
+     * 获取 API 服务（线程安全）
+     */
+    fun getApiService(): ChatApiService? {
+        return synchronized(lock) { apiService }
     }
 
     suspend fun sendMessageSimple(
@@ -100,7 +142,7 @@ class ChatRepository {
         try {
             updateConfig(config)
 
-            val service = apiService ?: return@withContext Result.failure(
+            val service = getApiService() ?: return@withContext Result.failure(
                 Exception("API 未配置或 Base URL 无效，请检查设置")
             )
 
@@ -197,7 +239,7 @@ class ChatRepository {
         Log.d("ChatRepository", "sendMessageStream called with config: baseUrl=${config.baseUrl}, model=${config.model}")
         updateConfig(config)
 
-        val service = apiService ?: throw Exception("API 未配置或 Base URL 无效，请检查设置")
+        val service = getApiService() ?: throw Exception("API 未配置或 Base URL 无效，请检查设置")
         Log.d("ChatRepository", "apiService is ready, provider=${config.provider}")
 
         when (config.provider) {
@@ -286,22 +328,25 @@ class ChatRepository {
      * 支持 Function Call 的消息发送
      * 当 AI 返回 tool_calls 时，调用 onToolCall 回调处理工具调用
      * 然后将工具结果追加到消息历史，继续获取 AI 的最终响应
+     *
+     * @param onStatusUpdate 状态更新回调，用于通知当前正在执行的操作
      */
     suspend fun sendMessageWithTools(
         messages: List<Message>,
         config: ModelConfig,
         tools: List<ToolDefinition>,
-        onToolCall: suspend (String, JsonObject) -> ToolResult
+        onToolCall: suspend (String, JsonObject) -> ToolResult,
+        onStatusUpdate: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             updateConfig(config)
 
-            val service = apiService ?: return@withContext Result.failure(
+            val service = getApiService() ?: return@withContext Result.failure(
                 Exception("API 未配置或 Base URL 无效，请检查设置")
             )
 
             when (config.provider) {
-                ApiProvider.OPENAI -> sendMessageOpenAIWithTools(service, messages, config, tools, onToolCall)
+                ApiProvider.OPENAI -> sendMessageOpenAIWithTools(service, messages, config, tools, onToolCall, onStatusUpdate)
                 ApiProvider.ANTHROPIC -> {
                     // Anthropic 暂不支持 Function Call，回退到普通消息
                     sendMessageAnthropic(service, messages, config)
@@ -318,7 +363,8 @@ class ChatRepository {
         messages: List<Message>,
         config: ModelConfig,
         tools: List<ToolDefinition>,
-        onToolCall: suspend (String, JsonObject) -> ToolResult
+        onToolCall: suspend (String, JsonObject) -> ToolResult,
+        onStatusUpdate: ((String) -> Unit)? = null
     ): Result<String> {
         val gson = Gson()
 
@@ -340,8 +386,8 @@ class ChatRepository {
             )
         }.toMutableList()
 
-        // 最多处理 5 轮工具调用，防止无限循环
-        var maxIterations = 5
+        // 最多处理 MAX_TOOL_ITERATIONS 轮工具调用，防止无限循环（浏览器自动化可能需要多步操作）
+        var maxIterations = MAX_TOOL_ITERATIONS
         var currentMessages = apiMessages.toList()
 
         while (maxIterations-- > 0) {
@@ -402,6 +448,9 @@ class ChatRepository {
 
                     Log.d("ChatRepository", "Executing tool: $toolName, args: $argsJson")
 
+                    // 通知状态
+                    onStatusUpdate?.invoke("正在执行: ${getToolDisplayName(toolName)}")
+
                     // 调用工具
                     val result = onToolCall(toolName, argsJson)
 
@@ -421,6 +470,57 @@ class ChatRepository {
             }
         }
 
-        return Result.failure(Exception("工具调用次数超过限制"))
+        // 达到工具调用次数限制，发送提示让模型基于现有结果给出最终回答
+        Log.d("ChatRepository", "Tool call limit reached ($MAX_TOOL_ITERATIONS), requesting final summary")
+        onStatusUpdate?.invoke("已达到工具调用次数上限，正在总结...")
+
+        // 使用 user 角色（而非 system）发送提示，避免多个 system 消息的兼容性问题
+        val limitMessage = mapOf(
+            "role" to "user",
+            "content" to """
+                【系统提示】你已达到工具调用次数上限（$MAX_TOOL_ITERATIONS 次）。
+                请根据已获取的工具执行结果，直接给出最终回答。
+                不要再尝试调用任何工具。
+            """.trimIndent()
+        )
+        currentMessages = currentMessages + limitMessage
+
+        // 发送最后一次请求（不带工具），强制模型直接回复
+        val finalRequest = ChatRequest(
+            model = config.model,
+            messages = currentMessages.map { msg ->
+                val role = msg["role"] as String
+                val content = msg["content"] as? String ?: ""
+                ChatMessage(role = role, content = content)
+            },
+            temperature = config.temperature,
+            maxTokens = config.maxTokens,
+            stream = false,
+            tools = null  // 不传工具，强制模型直接回复
+        )
+
+        val finalResponse = service.chat(finalRequest)
+        if (finalResponse.isSuccessful && finalResponse.body() != null) {
+            val content = finalResponse.body()!!.choices.firstOrNull()?.message?.content ?: ""
+            return Result.success(content)
+        }
+
+        return Result.failure(Exception("工具调用次数超过限制，且无法获取最终回复"))
+    }
+
+    /**
+     * 获取工具的友好显示名称
+     */
+    private fun getToolDisplayName(toolName: String): String {
+        return when (toolName) {
+            "browser_action" -> "浏览器操作"
+            "web_search" -> "网络搜索"
+            "create_task" -> "创建任务"
+            "delete_task" -> "删除任务"
+            "list_tasks" -> "查询任务"
+            "update_task_status" -> "更新任务状态"
+            "send_notification" -> "发送通知"
+            else -> toolName
+        }
     }
 }

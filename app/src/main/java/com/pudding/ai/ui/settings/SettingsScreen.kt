@@ -1,52 +1,82 @@
 package com.pudding.ai.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import com.pudding.ai.data.model.ApiProvider
-import com.pudding.ai.data.model.ModelConfig
 
+/**
+ * 设置项数据类
+ */
+data class SettingsItem(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit
+)
+
+/**
+ * 设置主页面
+ *
+ * 作为设置的入口页面，提供列表式的设置选项，
+ * 点击各项进入对应的二级设置页面。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    currentConfig: ModelConfig,
-    onSave: (ModelConfig) -> Unit,
+    onNavigateToModelConfig: () -> Unit,
+    onNavigateToEntityManagement: () -> Unit,
+    onNavigateToDailyMemory: () -> Unit,
+    onNavigateToSearchConfig: () -> Unit,
+    onNavigateToDebug: () -> Unit,
     onBack: () -> Unit
 ) {
-    var provider by remember { mutableStateOf(currentConfig.provider) }
-    var apiKey by remember { mutableStateOf(currentConfig.apiKey) }
-    var baseUrl by remember { mutableStateOf(currentConfig.baseUrl) }
-    var model by remember { mutableStateOf(currentConfig.model) }
-    var temperature by remember { mutableStateOf(currentConfig.temperature.toString()) }
-    var maxTokens by remember { mutableStateOf(currentConfig.maxTokens.toString()) }
-    var showApiKey by remember { mutableStateOf(false) }
-
-    // 当 currentConfig 变化时更新状态
-    LaunchedEffect(currentConfig) {
-        provider = currentConfig.provider
-        apiKey = currentConfig.apiKey
-        baseUrl = currentConfig.baseUrl
-        model = currentConfig.model
-        temperature = currentConfig.temperature.toString()
-        maxTokens = currentConfig.maxTokens.toString()
-    }
-
-    val scrollState = rememberScrollState()
+    val settingsItems = listOf(
+        SettingsItem(
+            title = "模型配置",
+            subtitle = "API 密钥、模型选择等",
+            icon = Icons.Default.Settings,
+            onClick = onNavigateToModelConfig
+        ),
+        SettingsItem(
+            title = "网络搜索",
+            subtitle = "启用 AI 网络搜索功能",
+            icon = Icons.Default.Search,
+            onClick = onNavigateToSearchConfig
+        ),
+        SettingsItem(
+            title = "实体管理",
+            subtitle = "查看和管理提取的实体",
+            icon = Icons.Default.Person,
+            onClick = onNavigateToEntityManagement
+        ),
+        SettingsItem(
+            title = "每日记忆",
+            subtitle = "查看历史对话摘要",
+            icon = Icons.Default.History,
+            onClick = onNavigateToDailyMemory
+        ),
+        SettingsItem(
+            title = "调试",
+            subtitle = "测试和查看功能执行过程",
+            icon = Icons.Default.BugReport,
+            onClick = onNavigateToDebug
+        )
+    )
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("模型配置") },
+                title = { Text("设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
@@ -55,148 +85,61 @@ fun SettingsScreen(
             )
         }
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(scrollState)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 协议类型选择
-            Text(
-                text = "API 协议类型",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = provider == ApiProvider.OPENAI,
-                    onClick = { provider = ApiProvider.OPENAI },
-                    label = { Text("OpenAI") }
-                )
-                FilterChip(
-                    selected = provider == ApiProvider.ANTHROPIC,
-                    onClick = { provider = ApiProvider.ANTHROPIC },
-                    label = { Text("Anthropic") }
-                )
-            }
-
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // API Key
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                label = { Text("API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = if (showApiKey)
-                    VisualTransformation.None
-                else
-                    PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    TextButton(onClick = { showApiKey = !showApiKey }) {
-                        Text(if (showApiKey) "隐藏" else "显示")
-                    }
-                },
-                singleLine = true
-            )
-
-            // Base URL
-            OutlinedTextField(
-                value = baseUrl,
-                onValueChange = { baseUrl = it },
-                label = { Text("Base URL") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(
-                        when (provider) {
-                            ApiProvider.OPENAI -> "例如: https://api.openai.com/v1"
-                            ApiProvider.ANTHROPIC -> "例如: https://api.anthropic.com/v1"
-                        }
-                    )
-                },
-                singleLine = true
-            )
-
-            // Model
-            OutlinedTextField(
-                value = model,
-                onValueChange = { model = it },
-                label = { Text("模型名称") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(
-                        when (provider) {
-                            ApiProvider.OPENAI -> "例如: gpt-4, gpt-3.5-turbo"
-                            ApiProvider.ANTHROPIC -> "例如: claude-3-opus-20240229"
-                        }
-                    )
-                },
-                singleLine = true
-            )
-
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // 高级设置
-            Text(
-                text = "高级设置",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            // Temperature
-            OutlinedTextField(
-                value = temperature,
-                onValueChange = { temperature = it },
-                label = { Text("Temperature") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                supportingText = { Text("控制响应的随机性 (0-2)") }
-            )
-
-            // Max Tokens
-            OutlinedTextField(
-                value = maxTokens,
-                onValueChange = { maxTokens = it },
-                label = { Text("Max Tokens") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                supportingText = { Text("响应的最大 token 数") }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // 保存按钮
-            Button(
-                onClick = {
-                    onSave(
-                        ModelConfig(
-                            provider = provider,
-                            baseUrl = baseUrl,
-                            apiKey = apiKey,
-                            model = model,
-                            temperature = temperature.toFloatOrNull() ?: 0.7f,
-                            maxTokens = maxTokens.toIntOrNull() ?: 4096
-                        )
-                    )
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("保存配置")
-            }
-
-            // 测试按钮
-            OutlinedButton(
-                onClick = { /* TODO: 测试连接 */ },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("测试连接")
+            items(settingsItems) { item ->
+                SettingsListItem(item = item)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
             }
         }
+    }
+}
+
+/**
+ * 设置列表项
+ */
+@Composable
+fun SettingsListItem(
+    item: SettingsItem,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { item.onClick() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = item.icon,
+            contentDescription = item.title,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Column {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                text = item.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Icon(
+            imageVector = Icons.Default.KeyboardArrowRight,
+            contentDescription = "进入",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

@@ -1,6 +1,7 @@
 package com.pudding.ai.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.Calendar
 
@@ -19,7 +20,15 @@ enum class TaskStatus {
 }
 
 // 任务
-@Entity(tableName = "tasks")
+@Entity(
+    tableName = "tasks",
+    indices = [
+        Index("status"),
+        Index("type"),
+        Index("nextRunAt"),
+        Index("conversationId")
+    ]
+)
 data class Task(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -53,7 +62,13 @@ data class Task(
 }
 
 // 任务执行记录
-@Entity(tableName = "task_executions")
+@Entity(
+    tableName = "task_executions",
+    indices = [
+        Index("taskId"),
+        Index("executedAt")
+    ]
+)
 data class TaskExecution(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

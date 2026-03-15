@@ -1,6 +1,7 @@
 package com.pudding.ai.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -11,7 +12,13 @@ import androidx.room.PrimaryKey
  * @property createdAt 创建时间
  * @property updatedAt 更新时间
  */
-@Entity(tableName = "conversations")
+@Entity(
+    tableName = "conversations",
+    indices = [
+        Index("updatedAt"),
+        Index("createdAt")
+    ]
+)
 data class Conversation(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

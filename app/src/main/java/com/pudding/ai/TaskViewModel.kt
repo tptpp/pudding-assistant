@@ -1,12 +1,16 @@
 package com.pudding.ai
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pudding.ai.data.database.TaskDao
+import com.pudding.ai.data.database.TaskExecutionDao
 import com.pudding.ai.data.model.*
+import com.pudding.ai.service.TaskScheduler
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.Calendar
+import javax.inject.Inject
 
 /**
  * 任务 ViewModel
@@ -16,12 +20,12 @@ import java.util.Calendar
  * - 任务状态的切换
  * - 任务执行记录的管理
  */
-class TaskViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val app = application as AssistantApp
-    private val database = app.database
-    private val taskDao = database.taskDao()
-    private val taskExecutionDao = database.taskExecutionDao()
+@HiltViewModel
+class TaskViewModel @Inject constructor(
+    private val taskDao: TaskDao,
+    private val taskExecutionDao: TaskExecutionDao,
+    private val taskScheduler: TaskScheduler
+) : ViewModel() {
 
     // 任务列表
     val tasks: Flow<List<Task>> = taskDao.getAllTasks()
@@ -38,10 +42,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             if (task.id == 0L) {
                 val id = taskDao.insertTask(task)
-                app.taskScheduler?.scheduleTask(task.copy(id = id))
+                taskScheduler.scheduleTask(task.copy(id = id))
             } else {
                 taskDao.updateTask(task)
-                app.taskScheduler?.scheduleTask(task)
+                taskScheduler.scheduleTask(task)
             }
         }
     }
@@ -58,8 +62,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             val updated = task.copy(status = newStatus)
             taskDao.updateTask(updated)
 
-            if (newStatus == TaskStatus.ACTIVE) app.taskScheduler?.scheduleTask(updated)
-            else app.taskScheduler?.cancelTask(updated)
+            if (newStatus == TaskStatus.ACTIVE) taskScheduler.scheduleTask(updated)
+            else taskScheduler.cancelTask(updated)
         }
     }
 
@@ -68,7 +72,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun deleteTask(task: Task) {
         viewModelScope.launch {
-            app.taskScheduler?.cancelTask(task)
+            taskScheduler.cancelTask(task)
             taskDao.deleteTask(task)
             taskExecutionDao.deleteExecutionsByTask(task.id)
         }
@@ -93,7 +97,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             val id = taskDao.insertTask(task)
-            app.taskScheduler?.scheduleTask(task.copy(id = id))
+            taskScheduler.scheduleTask(task.copy(id = id))
         }
     }
 }

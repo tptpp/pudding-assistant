@@ -21,15 +21,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.pudding.ai.data.model.Conversation
 import com.pudding.ai.data.model.Message
 import com.pudding.ai.data.model.MessageRole
-import io.noties.markwon.Markwon
-import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
-import io.noties.markwon.ext.tables.TablePlugin
-import io.noties.markwon.ext.tasklist.TaskListPlugin
-import io.noties.markwon.html.HtmlPlugin
-import io.noties.markwon.linkify.LinkifyPlugin
-import io.noties.markwon.syntax.Prism4jThemeDefault
-import io.noties.markwon.syntax.SyntaxHighlightPlugin
-import io.noties.prism4j.Prism4j
+import com.pudding.ai.util.MarkwonProvider
 
 /**
  * 聊天界面 Composable
@@ -74,7 +66,8 @@ fun ChatScreen(
     onNavigateToSettings: () -> Unit,
     streamingMessage: String = "",
     isStreaming: Boolean = false,
-    streamError: String? = null
+    streamError: String? = null,
+    currentStatus: String = "思考中..."
 ) {
     val listState = rememberLazyListState()
     var showDrawer by remember { mutableStateOf(false) }
@@ -179,24 +172,10 @@ fun ChatScreen(
             // 显示加载指示器（仅在没有流式消息时显示）
             if (isLoading && streamingMessage.isEmpty()) {
                 item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Start,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "思考中...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    CurrentStatusIndicator(
+                        currentMessage = currentStatus,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
                 }
             }
         }
@@ -305,6 +284,38 @@ fun StreamingMessageBubble(content: String) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 单行状态指示器 - 显示当前正在执行的操作
+ */
+@Composable
+fun CurrentStatusIndicator(
+    currentMessage: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = currentMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -458,23 +469,8 @@ fun MarkdownText(
 ) {
     val context = LocalContext.current
 
-    // 创建Markwon实例（使用remember缓存）
-    val markwon = remember {
-        val ctx = context as Context
-        Markwon.builder(ctx)
-            .usePlugin(StrikethroughPlugin.create())
-            .usePlugin(TablePlugin.create(ctx))
-            .usePlugin(TaskListPlugin.create(ctx))
-            .usePlugin(HtmlPlugin.create())
-            .usePlugin(LinkifyPlugin.create())
-            .usePlugin(
-                SyntaxHighlightPlugin.create(
-                    Prism4j(PrismGrammarLocator()),
-                    Prism4jThemeDefault.create()
-                )
-            )
-            .build()
-    }
+    // 使用单例 Markwon 实例，避免每次重组时创建
+    val markwon = remember { MarkwonProvider.getInstance(context) }
 
     AndroidView(
         factory = { ctx ->

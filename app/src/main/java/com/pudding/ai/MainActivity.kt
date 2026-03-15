@@ -21,12 +21,14 @@ import com.pudding.ai.ui.chat.*
 import com.pudding.ai.ui.settings.SettingsScreen
 import com.pudding.ai.ui.tasks.*
 import com.pudding.ai.ui.theme.AssistantTheme
+import dagger.hilt.android.AndroidEntryPoint
 
 /**
  * 主 Activity
  *
  * 应用的入口点，负责初始化界面和导航。
  */
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

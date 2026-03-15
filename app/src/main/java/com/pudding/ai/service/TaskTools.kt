@@ -43,10 +43,12 @@ data class ToolCallFunction(
     @SerializedName("arguments")
     val argumentsJson: String
 ) {
-    private val gson = com.google.gson.Gson()
-
     fun getArgumentsAsJsonObject(): JsonObject {
         return gson.fromJson(argumentsJson, JsonObject::class.java)
+    }
+
+    companion object {
+        private val gson = com.google.gson.Gson()
     }
 }
 
@@ -210,6 +212,116 @@ object TaskTools {
     )
 
     /**
+     * 网络搜索工具
+     */
+    val WEB_SEARCH = ToolDefinition(
+        function = ToolFunction(
+            name = "web_search",
+            description = "搜索网络获取实时信息。当用户询问时事、新闻、天气、具体数据等需要最新信息时使用此工具。",
+            parameters = ToolParameters(
+                properties = mapOf(
+                    "query" to ToolProperty(
+                        type = "string",
+                        description = "搜索关键词，简洁明确的搜索词效果更好"
+                    ),
+                    "search_type" to ToolProperty(
+                        type = "string",
+                        description = "搜索类型：general(通用搜索)、news(新闻搜索)",
+                        enum = listOf("general", "news")
+                    )
+                ),
+                required = listOf("query")
+            )
+        )
+    )
+
+    /**
+     * 浏览器自动化工具
+     */
+    val BROWSER_ACTION = ToolDefinition(
+        function = ToolFunction(
+            name = "browser_action",
+            description = """
+                执行浏览器自动化操作，支持自动登录、填表、抢票等功能。
+
+                支持的操作：
+                - navigate: 打开网页
+                - click: 点击元素
+                - type: 输入文本
+                - wait: 等待元素出现
+                - screenshot: 截图
+                - getContent: 获取页面内容
+                - executeJs: 执行 JavaScript
+                - waitForNavigation: 等待页面加载
+                - fillForm: 填充表单
+                - submit: 提交表单
+                - saveCookies: 保存当前 Cookie
+                - loadCookies: 加载保存的 Cookie
+                - clearCookies: 清除 Cookie
+
+                使用 CSS 选择器定位元素，例如：
+                - #username (ID 选择器)
+                - .btn (类选择器)
+                - input[name="email"] (属性选择器)
+
+                Cookie 会话用于保存登录状态，例如：
+                - 首次登录时使用 saveCookies 保存登录状态
+                - 后续操作时使用 loadCookies 恢复登录状态
+
+                可视化模式：
+                - 设置 visible=true 可以显示浏览器窗口，让用户看到操作过程
+                - 适用于需要用户观察、手动输入密码等场景
+            """.trimIndent(),
+            parameters = ToolParameters(
+                properties = mapOf(
+                    "action" to ToolProperty(
+                        type = "string",
+                        description = "操作类型",
+                        enum = listOf(
+                            "navigate", "click", "type", "wait", "screenshot",
+                            "getContent", "executeJs", "waitForNavigation",
+                            "fillForm", "submit", "saveCookies", "loadCookies", "clearCookies"
+                        )
+                    ),
+                    "visible" to ToolProperty(
+                        type = "boolean",
+                        description = "是否显示浏览器窗口让用户可见。当用户说'让我看看'、'我要看'、'打开给我看'等时设置为 true"
+                    ),
+                    "url" to ToolProperty(
+                        type = "string",
+                        description = "URL（navigate 操作必需）"
+                    ),
+                    "selector" to ToolProperty(
+                        type = "string",
+                        description = "CSS 选择器（click/type/wait/submit 操作必需）"
+                    ),
+                    "text" to ToolProperty(
+                        type = "string",
+                        description = "输入的文本（type 操作必需）"
+                    ),
+                    "timeout" to ToolProperty(
+                        type = "integer",
+                        description = "超时时间（毫秒），默认 30000"
+                    ),
+                    "script" to ToolProperty(
+                        type = "string",
+                        description = "JavaScript 脚本（executeJs 操作必需）"
+                    ),
+                    "fields" to ToolProperty(
+                        type = "object",
+                        description = "表单字段，格式：{\"选择器\": \"值\", ...}"
+                    ),
+                    "sessionName" to ToolProperty(
+                        type = "string",
+                        description = "Cookie 会话名称，用于区分不同网站（默认 'default'）"
+                    )
+                ),
+                required = listOf("action")
+            )
+        )
+    )
+
+    /**
      * 任务执行时使用的工具
      * 用于定时任务执行时 AI 可用的工具集
      */
@@ -219,7 +331,7 @@ object TaskTools {
      * 对话时使用的工具
      * 用于用户与 AI 对话时可用的工具集
      */
-    val CONVERSATION_TOOLS = listOf(CREATE_TASK, DELETE_TASK, LIST_TASKS, UPDATE_TASK_STATUS)
+    val CONVERSATION_TOOLS = listOf(CREATE_TASK, DELETE_TASK, LIST_TASKS, UPDATE_TASK_STATUS, WEB_SEARCH, BROWSER_ACTION)
 
     /**
      * 所有工具列表
